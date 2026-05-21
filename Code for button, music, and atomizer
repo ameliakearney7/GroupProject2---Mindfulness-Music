@@ -1,0 +1,243 @@
+import pygame
+import sys
+import os
+import random
+import RPi.GPIO as GPIO
+
+pygame.init()
+pygame.mixer.init()
+
+# ── GPIO / Atomizer setup ─────────────────────────────────────────────────────
+ATOMIZER_PIN = 2
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(ATOMIZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+atomizer_on = False
+
+def atomizer_start():
+    GPIO.output(ATOMIZER_PIN, GPIO.HIGH)
+    print("Atomizer ON")
+
+def atomizer_stop():
+    GPIO.output(ATOMIZER_PIN, GPIO.LOW)
+    print("Atomizer OFF")
+
+def toggle_atomizer():
+    global atomizer_on
+    atomizer_on = not atomizer_on
+    if atomizer_on:
+        atomizer_start()
+    else:
+        atomizer_stop()
+
+# ── Screen ────────────────────────────────────────────────────────────────────
+screen_width  = 560
+screen_height = 510   # extra room for atomizer button
+screen = pygame.display.set_mode((screen_width, screen_height))
+pygame.display.set_caption("Mood Player")
+
+BLACK      = (0,   0,   0)
+WHITE      = (255, 255, 255)
+DARK_GREY  = (60,  60,  60)
+MID_GREY   = (120, 120, 120)
+LIGHT_GREY = (210, 210, 210)
+GREEN      = (50,  180, 80)
+DARK_GREEN = (30,  120, 55)
+RED        = (200, 50,  50)
+DARK_RED   = (140, 30,  30)
+
+# ── Song folders ──────────────────────────────────────────────────────────────
+FOLDERS = {
+    "angry":     "/home/lick/Downloads/Pi Songs/Amelia (34 - happy, angry, 4 of sad)/Angry",
+    "nostalgic": "/home/lick/Downloads/Pi Songs/Aaliyah_ Sad, Nostalgic, calm/Nostalgic",
+    "happy":     "/home/lick/Downloads/Pi Songs/Amelia (34 - happy, angry, 4 of sad)/happy",
+    "sad":       "/home/lick/Downloads/Pi Songs/Aaliyah_ Sad, Nostalgic, calm/Sad",
+    "in love":   "/home/lick/Downloads/Pi Songs/Julia_ sleepy, bored, confident, in love, excited-grwm/In Love",
+    "bored":     "/home/lick/Downloads/Pi Songs/Julia_ sleepy, bored, confident, in love, excited-grwm/Bored",
+}
+
+def get_random_song(emotion):
+    folder = FOLDERS.get(emotion, "")
+    if not os.path.isdir(folder):
+        print(f"Folder not found: {folder}")
+        return None
+    songs = [f for f in os.listdir(folder) if f.lower().endswith((".mp3", ".wav", ".ogg"))]
+    if not songs:
+        print(f"No songs found in: {folder}")
+        return None
+    return os.path.join(folder, random.choice(songs))
+
+def play_song(emotion):
+    global is_paused
+    pygame.mixer.music.stop()
+    song = get_random_song(emotion)
+    if song:
+        pygame.mixer.music.load(song)
+        pygame.mixer.music.play()
+        is_paused = False
+        print(f"Now playing ({emotion}): {os.path.basename(song)}")
+
+# ── Mood circles ──────────────────────────────────────────────────────────────
+CIRCLES_DATA = [
+    ("angry",     (255, 0,   0)),
+    ("nostalgic", (255, 125, 0)),
+    ("happy",     (255, 255, 0)),
+    ("sad",       (0,   0,   255)),
+    ("in love",   (255, 182, 193)),
+    ("bored",     (169, 169, 169)),
+]
+
+circle_radius = 49
+cols = 3
+
+h_spacing = screen_width // (cols + 1)
+v_spacing = 364 // 3
+
+circles = []
+for i, (emotion, color) in enumerate(CIRCLES_DATA):
+    x = h_spacing * (i % cols + 1)
+    y = v_spacing * (i // cols + 1)
+    circles.append((x, y, color, emotion))
+
+font       = pygame.font.SysFont(None, 21, bold=True)
+font_small = pygame.font.SysFont(None, 17)
+
+now_playing = ""
+is_paused   = False
+
+# ── Button geometry ───────────────────────────────────────────────────────────
+BTN_W, BTN_H = 112, 35
+
+# Play/pause button
+pp_btn_y  = 399
+pp_btn_rect = pygame.Rect(screen_width // 2 - BTN_W // 2, pp_btn_y, BTN_W, BTN_H)
+
+# Atomizer button (below play/pause, with a small gap)
+at_btn_y  = pp_btn_y + BTN_H + 18
+at_btn_rect = pygame.Rect(screen_width // 2 - BTN_W // 2, at_btn_y, BTN_W, BTN_H)
+
+def draw_pause_play_button(mouse_pos):
+    hovered  = pp_btn_rect.collidepoint(mouse_pos)
+    has_song = bool(now_playing)
+
+    if not has_song:
+        bg = LIGHT_GREY;  fg = MID_GREY;  label = "play / pause"
+    elif hovered:
+        bg = (30, 30, 30); fg = WHITE;    label = "play" if is_paused else "pause"
+    else:
+        bg = DARK_GREY;    fg = WHITE;    label = "play" if is_paused else "pause"
+
+    pygame.draw.rect(screen, bg, pp_btn_rect)
+    pygame.draw.rect(screen, BLACK, pp_btn_rect, 2)
+
+    cx, cy = pp_btn_rect.centerx, pp_btn_rect.centery
+    if is_paused:
+        pts = [(cx - 21, cy - 10), (cx - 21, cy + 10), (cx - 7, cy)]
+        pygame.draw.polygon(screen, fg, pts)
+    else:
+        pygame.draw.rect(screen, fg, (cx - 21, cy - 8, 6, 17))
+        pygame.draw.rect(screen, fg, (cx - 11, cy - 8, 6, 17))
+
+    txt = font_small.render(label, True, fg)
+    screen.blit(txt, txt.get_rect(midleft=(cx - 1, cy)))
+
+    # Label underneath
+    lbl = font_small.render("music", True, MID_GREY)
+    screen.blit(lbl, lbl.get_rect(center=(screen_width // 2, pp_btn_y + BTN_H + 6)))
+
+def draw_atomizer_button(mouse_pos):
+    hovered = at_btn_rect.collidepoint(mouse_pos)
+
+    if atomizer_on:
+        bg = DARK_GREEN if not hovered else (20, 100, 45)
+        fg = WHITE
+        label = "on"
+    else:
+        bg = RED if not hovered else DARK_RED
+        fg = WHITE
+        label = "off"
+
+    pygame.draw.rect(screen, bg, at_btn_rect)
+    pygame.draw.rect(screen, BLACK, at_btn_rect, 2)
+
+    cx, cy = at_btn_rect.centerx, at_btn_rect.centery
+
+    # Small circle indicator on the left
+    dot_color = (150, 255, 150) if atomizer_on else (255, 150, 150)
+    pygame.draw.circle(screen, dot_color, (cx - 22, cy), 6)
+    pygame.draw.circle(screen, BLACK,     (cx - 22, cy), 6, 1)
+
+    txt = font_small.render(label, True, fg)
+    screen.blit(txt, txt.get_rect(midleft=(cx - 10, cy)))
+
+    # Label underneath
+    lbl = font_small.render("atomizer", True, MID_GREY)
+    screen.blit(lbl, lbl.get_rect(center=(screen_width // 2, at_btn_y + BTN_H + 6)))
+
+def handle_pause_play():
+    global is_paused
+    if not now_playing:
+        return
+    if is_paused:
+        pygame.mixer.music.unpause()
+        is_paused = False
+    else:
+        pygame.mixer.music.pause()
+        is_paused = True
+
+def draw_circles(mouse_pos):
+    for (x, y, color, emotion) in circles:
+        hovered = (x - mouse_pos[0])**2 + (y - mouse_pos[1])**2 <= circle_radius**2
+        draw_color = tuple(min(255, c + 40) for c in color) if hovered else color
+        pygame.draw.circle(screen, draw_color, (x, y), circle_radius)
+        pygame.draw.circle(screen, BLACK, (x, y), circle_radius, 2)
+
+        words = emotion.split()
+        if len(words) == 1:
+            lbl = font.render(words[0], True, BLACK)
+            screen.blit(lbl, lbl.get_rect(center=(x, y)))
+        else:
+            for j, word in enumerate(words):
+                line_y = y - (len(words) - 1) * 7 + j * 14
+                lbl = font.render(word, True, BLACK)
+                screen.blit(lbl, lbl.get_rect(center=(x, line_y)))
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+running = True
+try:
+    while running:
+        mouse_pos = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if pp_btn_rect.collidepoint(event.pos):
+                    handle_pause_play()
+                elif at_btn_rect.collidepoint(event.pos):
+                    toggle_atomizer()
+                else:
+                    for (x, y, color, emotion) in circles:
+                        if (x - event.pos[0])**2 + (y - event.pos[1])**2 <= circle_radius**2:
+                            play_song(emotion)
+                            now_playing = emotion
+                            break
+
+        screen.fill(WHITE)
+        draw_circles(mouse_pos)
+
+        if now_playing:
+            state_tag = " (paused)" if is_paused else ""
+            status = font_small.render(f"now playing: {now_playing}{state_tag}", True, (80, 80, 80))
+            screen.blit(status, status.get_rect(center=(screen_width // 2, 374)))
+
+        draw_pause_play_button(mouse_pos)
+        draw_atomizer_button(mouse_pos)
+        pygame.display.flip()
+
+finally:
+    atomizer_stop()
+    GPIO.cleanup()
+    pygame.mixer.music.stop()
+    pygame.quit()
+    sys.exit()
